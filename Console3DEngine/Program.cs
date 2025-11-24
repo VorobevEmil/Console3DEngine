@@ -6,7 +6,7 @@ int height = Console.WindowHeight - 1;
 int width = Console.WindowWidth;
 float originX = (float)width / 2;
 float originY = (float)height / 2;
-Vector3[] world =
+Vector3[] cube =
 [
     new(-1, -1, -1),
     new(1, -1, -1),
@@ -19,7 +19,7 @@ Vector3[] world =
     new(-1, 1, 1),
 ];
 
-int[][] faces =
+int[][] cubeFaces =
 [
     // Front (z = -1) – смотрит на камеру
     [1, 3, 2],
@@ -47,14 +47,31 @@ int[][] faces =
 ];
 
 
+Vector3 cubePos = new(0, 0, 0);
+
+Vector3[] world =
+{
+    new(-5, -2, -5),
+    new(5, -2, -5),
+    new(-5, -2, 5),
+    new(5, -2, 5)
+};
+
+int[][] worldFaces =
+[
+    [1, 3, 2],
+    [3, 4, 2]
+];
+
+
 // (Vector3[] world, int[][] faces) = WavefrontOBJParser.Parse("teapot.obj");
 
 
 Vector3 camPos = new(0, 0.0f, -6f);
 
-float nearP = 0.1f;
-float farP = 30.0f;
-float fov = MathF.PI / 3f; // 60°
+const float nearP = 0.1f;
+const float farP = 50.0f;
+const float fov = MathF.PI / 3f; // 60°
 float f = 0.5f * width / MathF.Tan(fov / 2f);
 
 float angleOfFigure = 1 * MathF.PI / 180;
@@ -76,7 +93,6 @@ _ = Task.Run(() =>
     {
         ConsoleKey key = Console.ReadKey(true).Key;
 
-        // 1) сначала обновляем yaw
         if (key is ConsoleKey.LeftArrow or ConsoleKey.RightArrow or ConsoleKey.UpArrow or ConsoleKey.DownArrow)
         {
             camYawDeg += key switch
@@ -102,7 +118,7 @@ _ = Task.Run(() =>
             rotateYView = GetRotateY(-yawRad);
 
 
-            if (camXawDegK is > -70 and <= 70)
+            if (camXawDegK is > -90 and <= 90)
             {
                 camXawDeg = camXawDegK;
                 float xawRad = ToRadians(camXawDeg);
@@ -112,7 +128,7 @@ _ = Task.Run(() =>
             }
         }
 
-        // 2) считаем forward/right в мировой системе координат
+        // считаем forward/right в мировой системе координат
         Vector3 forward = Mul(rotateYCamWorld, new Vector3(0, 0, 1));
         Vector3 right = Mul(rotateYCamWorld, new Vector3(1, 0, 0));
 
@@ -148,93 +164,36 @@ while (true)
     for (int j = 0; j < width; j++)
         screen[i, j] = ' ';
 
-    world = world
+    // 1) Локальные повороты куба (в его собственной системе координат)
+    Vector3[] cubeLocal = cube
         .Select(w => Mul(rotateX, w))
         .Select(w => Mul(rotateY, w))
         .Select(w => Mul(rotateZ, w))
         .ToArray();
+    cube = cubeLocal;
 
-    Vector3[] view = world
+    // 2) Перенос в мировые координаты
+    Vector3[] cubeWorld = cubeLocal
+        .Select(p => p + cubePos)
+        .ToArray();
+
+    // 3) Перевод мира в координаты камеры (view) — уже из cubeWorld
+    Vector3[] viewCube = cubeWorld
         .Select(p => p - camPos)
         .Select(pCamPos => Mul(rotateYView, pCamPos))
         .Select(pCamPos => Mul(rotateXView, pCamPos))
         .ToArray();
 
-    (int x, int y)?[] screenPts = new (int, int)?[view.Length];
+    Vector3[] viewWorld = world
+        .Select(p => p - camPos)
+        .Select(pCamPos => Mul(rotateYView, pCamPos))
+        .Select(pCamPos => Mul(rotateXView, pCamPos))
+        .ToArray();
 
-    for (int i = 0; i < view.Length; i++)
-    {
-        Vector3 p = view[i];
-        if (p.Z < nearP || p.Z > farP)
-        {
-            screenPts[i] = null;
-            continue;
-        }
 
-        float xProj = f * (p.X / p.Z);
-        float yProj = f * 0.4949f * (p.Y / p.Z);
+    RenderModel(viewWorld, worldFaces, screen, true);
+    RenderModel(viewCube, cubeFaces, screen);
 
-        int sx = (int)(originX + Math.Round(xProj));
-        int sy = (int)(originY - Math.Round(yProj));
-
-        screenPts[i] = (sx, sy);
-    }
-
-    // === back-face culling ===
-    List<(int a, int b)> visibleEdges = new();
-
-    foreach (int[] face in faces)
-    {
-        int i0 = face[0] - 1;
-        int i1 = face[1] - 1;
-        int i2 = face[2] - 1;
-
-        Vector3 v0 = view[i0];
-        Vector3 v1 = view[i1];
-        Vector3 v2 = view[i2];
-
-        // Если вся грань позади камеры — можно даже не считать нормаль
-        if (v0.Z <= 0 && v1.Z <= 0 && v2.Z <= 0)
-            continue;
-
-        Vector3 e1 = v1 - v0;
-        Vector3 e2 = v2 - v0;
-        Vector3 normal = Vector3.Cross(e1, e2);
-
-        Vector3 center = (v0 + v1 + v2) / 3f;
-        Vector3 viewDir = Vector3.Normalize(center);
-
-        float d = Vector3.Dot(normal, viewDir);
-
-        // back-face: нормаль смотрит от камеры
-        if (d >= 0)
-            continue;
-
-        // Грань фронтальная → добавляем её рёбра
-        visibleEdges.Add((face[0], face[1]));
-        visibleEdges.Add((face[1], face[2]));
-        visibleEdges.Add((face[2], face[0]));
-    }
-
-    foreach (var (a, b) in visibleEdges)
-    {
-        int ia = a - 1;
-        int ib = b - 1;
-
-        Vector3 va = view[ia];
-        Vector3 vb = view[ib];
-
-        if (va.Z < 0 || vb.Z < 0)
-            continue;
-
-        (int x, int y)? pa = screenPts[ia];
-        (int x, int y)? pb = screenPts[ib];
-
-        if (pa.HasValue && pb.HasValue)
-        {
-            screen.DrawLine(pa.Value.x, pa.Value.y, pb.Value.x, pb.Value.y);
-        }
-    }
 
     for (int i = 0; i < height; i++)
     {
@@ -277,3 +236,83 @@ float[,] GetRotateZ(float angle) => new[,]
 };
 
 float ToRadians(float degrees) => degrees * MathF.PI / 180f;
+
+void RenderModel(Vector3[] model, int[][] faces,
+    char[,] chars, bool twoSided = false)
+{
+    (int x, int y)?[] screenPts = new (int, int)?[model.Length];
+
+    for (int i = 0; i < model.Length; i++)
+    {
+        Vector3 p = model[i];
+        if (p.Z < nearP || p.Z > farP)
+        {
+            screenPts[i] = null;
+            continue;
+        }
+
+        float xProj = f * (p.X / p.Z);
+        float yProj = f * 0.4949f * (p.Y / p.Z);
+
+        int sx = (int)(originX + Math.Round(xProj));
+        int sy = (int)(originY - Math.Round(yProj));
+
+        screenPts[i] = (sx, sy);
+    }
+
+
+    // === back-face culling ===
+    List<(int a, int b)> visibleEdges = new();
+
+    foreach (int[] face in faces)
+    {
+        int i0 = face[0] - 1;
+        int i1 = face[1] - 1;
+        int i2 = face[2] - 1;
+
+        Vector3 v0 = model[i0];
+        Vector3 v1 = model[i1];
+        Vector3 v2 = model[i2];
+
+        if (v0.Z <= 0 && v1.Z <= 0 && v2.Z <= 0)
+            continue;
+
+        Vector3 e1 = v1 - v0;
+        Vector3 e2 = v2 - v0;
+        Vector3 normal = Vector3.Cross(e1, e2);
+
+        Vector3 center = (v0 + v1 + v2) / 3f;
+        Vector3 viewDir = Vector3.Normalize(center);
+
+        float d = Vector3.Dot(normal, viewDir);
+
+        // back-face: нормаль смотрит от камеры
+        if (!twoSided && d >= 0)
+            continue;
+
+        // Грань фронтальная → добавляем её рёбра
+        visibleEdges.Add((face[0], face[1]));
+        visibleEdges.Add((face[1], face[2]));
+        visibleEdges.Add((face[2], face[0]));
+    }
+
+    foreach (var (a, b) in visibleEdges)
+    {
+        int ia = a - 1;
+        int ib = b - 1;
+
+        Vector3 va = model[ia];
+        Vector3 vb = model[ib];
+
+        if (va.Z < 0 || vb.Z < 0)
+            continue;
+
+        (int x, int y)? pa = screenPts[ia];
+        (int x, int y)? pb = screenPts[ib];
+
+        if (pa.HasValue && pb.HasValue)
+        {
+            chars.DrawLine(pa.Value.x, pa.Value.y, pb.Value.x, pb.Value.y);
+        }
+    }
+}
