@@ -1,99 +1,133 @@
-﻿using Console3DEngine;
+﻿using System.Numerics;
+using Console3DEngine;
 
 Console.CursorVisible = false;
+int height = Console.WindowHeight - 1;
+int width = Console.WindowWidth;
+float originX = (float)width / 2;
+float originY = (float)height / 2;
+Vector3[] world =
+[
+    new(-1, -1, -1),
+    new(1, -1, -1),
+    new(1, 1, -1),
+    new(-1, 1, -1),
 
-float camYawDeg = 0f;
-Vector3 camPos = new(0, 0, 3f);
+    new(-1, -1, 1),
+    new(1, -1, 1),
+    new(1, 1, 1),
+    new(-1, 1, 1),
+];
 
-(Vector3[] modelInit, (int a, int b, int c)[] faces) = WavefrontOBJParser.Parse("teapot.obj");
-(int, int)[] edges = faces.SelectMany(f => new[] { (f.a, f.b), (f.b, f.c), (f.c, f.a) }).ToArray();
+int[][] faces =
+[
+    // Front (z = -1) – смотрит на камеру
+    [1, 3, 2],
+    [1, 4, 3],
 
-while (true)
+    // Back (z = +1)
+    [5, 6, 7],
+    [5, 7, 8],
+
+    // Left (x = -1)
+    [1, 5, 8],
+    [1, 8, 4],
+
+    // Right (x = +1)
+    [2, 3, 7],
+    [2, 7, 6],
+
+    // Top (y = +1)
+    [4, 8, 7],
+    [4, 7, 3],
+
+    // Bottom (y = -1)
+    [1, 2, 6],
+    [1, 6, 5]
+];
+
+
+// (Vector3[] world, int[][] faces) = WavefrontOBJParser.Parse("teapot.obj");
+
+
+Vector3 camPos = new(0, 0.0f, -6f);
+
+float nearP = 0.1f;
+float farP = 30.0f;
+float fov = MathF.PI / 3f; // 60°
+float f = 0.5f * width / MathF.Tan(fov / 2f);
+
+float angleOfFigure = 1 * MathF.PI / 180;
+
+float[,] rotateX = GetRotateX(angleOfFigure);
+float[,] rotateY = GetRotateY(angleOfFigure);
+float[,] rotateZ = GetRotateZ(angleOfFigure);
+float[,] rotateYCamWorld = GetRotateY(0); // для движения (cam -> world)
+float[,] rotateYView = GetRotateY(0); // для рендера (world -> cam)
+
+float[,] rotateXView = GetRotateX(0); // для рендера (world -> cam)
+
+_ = Task.Run(() =>
 {
-    int h = Console.WindowHeight - 1;
-    int w = Console.WindowWidth;
-    char[,] board = new char[h, w];
-    for (int y = 0; y < h; y++)
-    for (int x = 0; x < w; x++)
-        board[y, x] = ' ';
+    float camYawDeg = 0;
+    float camXawDeg = 0;
 
-    float originX = w / 2f, originY = h / 2f;
-
-    // --- VIEW: p_view = R_cam^T * (p_world - camPos)
-    float yaw = camYawDeg * MathF.PI / 180f;
-    float cy = MathF.Cos(yaw), sy = MathF.Sin(yaw);
-
-    float[,] Rcam =
-    {
-        { cy, 0f, sy },
-        { 0f, 1f, 0f },
-        { -sy, 0f, cy }
-    };
-
-    float[,] RcamT =
-    {
-        { cy, 0f, -sy },
-        { 0f, 1f, 0f },
-        { sy, 0f, cy }
-    };
-
-    Vector3 Mul(float[,] m, Vector3 v)
-        => new(m[0, 0] * v.X + m[0, 1] * v.Y + m[0, 2] * v.Z,
-            m[1, 0] * v.X + m[1, 1] * v.Y + m[1, 2] * v.Z,
-            m[2, 0] * v.X + m[2, 1] * v.Y + m[2, 2] * v.Z);
-
-    Vector3[] world = modelInit;
-
-    Vector3[] view = world
-        .Select(p => Mul(RcamT, p - camPos)).ToArray();
-
-    // --- Перспектива
-    float near = 0.1f;
-    float fov = 60f * MathF.PI / 180f;
-    float scale = 0.5f * w / MathF.Tan(fov / 2f);
-    float aspectFixY = 0.6f;
-
-    (int x, int y)?[] screenPts = new (int, int)?[view.Length];
-    for (int i = 0; i < view.Length; i++)
-    {
-        Vector3 p = view[i];
-        if (p.Z > near)
-        {
-            float xs = originX + scale * (p.X / p.Z);
-            float ys = originY - scale * aspectFixY * (p.Y / p.Z);
-            screenPts[i] = ((int)MathF.Round(xs), (int)MathF.Round(ys));
-        }
-        else
-        {
-            screenPts[i] = null;
-        }
-    }
-
-    foreach (var (a, b) in edges)
-    {
-        (int x, int y)? pa = screenPts[a];
-        (int x, int y)? pb = screenPts[b];
-        if (pa.HasValue && pb.HasValue)
-        {
-            DrawLineBresenham(pa.Value.x, pa.Value.y, pb.Value.x, pb.Value.y, '*');
-        }
-    }
-
-    Console.SetCursorPosition(0, 0);
-    for (int y = 0; y < h; y++)
-    {
-        for (int x = 0; x < w; x++) Console.Write(board[y, x]);
-        if (y < h - 1) Console.Write('\n');
-    }
-
-    if (Console.KeyAvailable)
+    while (true)
     {
         ConsoleKey key = Console.ReadKey(true).Key;
-        Vector3 forward = Mul(Rcam, new Vector3(0, 0, 1));
-        Vector3 right = Mul(Rcam, new Vector3(1, 0, 0));
-        forward = new Vector3(forward.X, 0, forward.Z).Normalized;
+
+        // 1) сначала обновляем yaw
+        if (key is ConsoleKey.LeftArrow or ConsoleKey.RightArrow or ConsoleKey.UpArrow or ConsoleKey.DownArrow)
+        {
+            camYawDeg += key switch
+            {
+                ConsoleKey.LeftArrow => 10f,
+                ConsoleKey.RightArrow => -10f,
+                _ => 0f
+            };
+
+            float camXawDegK = camXawDeg + key switch
+            {
+                ConsoleKey.UpArrow => 10f,
+                ConsoleKey.DownArrow => -10f,
+                _ => 0f
+            };
+
+            float yawRad = ToRadians(camYawDeg);
+
+            // поворот камеры в мире (куда смотрит)
+            rotateYCamWorld = GetRotateY(yawRad);
+
+            // поворот мира в координаты камеры (view) — угол с минусом
+            rotateYView = GetRotateY(-yawRad);
+
+
+            if (camXawDegK is > -70 and <= 70)
+            {
+                camXawDeg = camXawDegK;
+                float xawRad = ToRadians(camXawDeg);
+
+                // поворот мира в координаты камеры (view) — угол с минусом
+                rotateXView = GetRotateX(-xawRad);
+            }
+        }
+
+        // 2) считаем forward/right в мировой системе координат
+        Vector3 forward = Mul(rotateYCamWorld, new Vector3(0, 0, 1));
+        Vector3 right = Mul(rotateYCamWorld, new Vector3(1, 0, 0));
+
+        // ходим только по земле
+        forward = forward with { Y = 0 };
+        right = right with { Y = 0 };
+
+        if (forward.LengthSquared() > 0)
+            forward /= forward.Length();
+
+        if (right.LengthSquared() > 0)
+            right /= right.Length();
 
         float step = 0.5f;
+
         switch (key)
         {
             case ConsoleKey.W: camPos += step * forward; break;
@@ -102,40 +136,144 @@ while (true)
             case ConsoleKey.D: camPos += step * right; break;
             case ConsoleKey.Q: camPos += new Vector3(0, -step, 0); break;
             case ConsoleKey.E: camPos += new Vector3(0, step, 0); break;
-            case ConsoleKey.LeftArrow: camYawDeg -= 3f; break;
-            case ConsoleKey.RightArrow: camYawDeg += 3f; break;
         }
-
-        while (Console.KeyAvailable) Console.ReadKey(true);
     }
+});
 
-    void DrawLineBresenham(int x0, int y0, int x1, int y1, char ch = '*')
+while (true)
+{
+    Console.Clear();
+    char[,] screen = new char[height, width];
+    for (int i = 0; i < height; i++)
+    for (int j = 0; j < width; j++)
+        screen[i, j] = ' ';
+
+    world = world
+        .Select(w => Mul(rotateX, w))
+        .Select(w => Mul(rotateY, w))
+        .Select(w => Mul(rotateZ, w))
+        .ToArray();
+
+    Vector3[] view = world
+        .Select(p => p - camPos)
+        .Select(pCamPos => Mul(rotateYView, pCamPos))
+        .Select(pCamPos => Mul(rotateXView, pCamPos))
+        .ToArray();
+
+    (int x, int y)?[] screenPts = new (int, int)?[view.Length];
+
+    for (int i = 0; i < view.Length; i++)
     {
-        int W = board.GetLength(1), H = board.GetLength(0);
-        bool steep = Math.Abs(y1 - y0) > Math.Abs(x1 - x0);
-        if (steep)
+        Vector3 p = view[i];
+        if (p.Z < nearP || p.Z > farP)
         {
-            (x0, y0, x1, y1) = (y0, x0, y1, x1);
+            screenPts[i] = null;
+            continue;
         }
 
-        if (x0 > x1)
-        {
-            (x0, x1) = (x1, x0);
-            (y0, y1) = (y1, y0);
-        }
+        float xProj = f * (p.X / p.Z);
+        float yProj = f * 0.4949f * (p.Y / p.Z);
 
-        int dx = x1 - x0, dy = Math.Abs(y1 - y0), err = dx / 2, ystep = y0 < y1 ? 1 : -1;
-        int y = y0;
-        for (int x = x0; x <= x1; x++)
+        int sx = (int)(originX + Math.Round(xProj));
+        int sy = (int)(originY - Math.Round(yProj));
+
+        screenPts[i] = (sx, sy);
+    }
+
+    // === back-face culling ===
+    List<(int a, int b)> visibleEdges = new();
+
+    foreach (int[] face in faces)
+    {
+        int i0 = face[0] - 1;
+        int i1 = face[1] - 1;
+        int i2 = face[2] - 1;
+
+        Vector3 v0 = view[i0];
+        Vector3 v1 = view[i1];
+        Vector3 v2 = view[i2];
+
+        // Если вся грань позади камеры — можно даже не считать нормаль
+        if (v0.Z <= 0 && v1.Z <= 0 && v2.Z <= 0)
+            continue;
+
+        Vector3 e1 = v1 - v0;
+        Vector3 e2 = v2 - v0;
+        Vector3 normal = Vector3.Cross(e1, e2);
+
+        Vector3 center = (v0 + v1 + v2) / 3f;
+        Vector3 viewDir = Vector3.Normalize(center);
+
+        float d = Vector3.Dot(normal, viewDir);
+
+        // back-face: нормаль смотрит от камеры
+        if (d >= 0)
+            continue;
+
+        // Грань фронтальная → добавляем её рёбра
+        visibleEdges.Add((face[0], face[1]));
+        visibleEdges.Add((face[1], face[2]));
+        visibleEdges.Add((face[2], face[0]));
+    }
+
+    foreach (var (a, b) in visibleEdges)
+    {
+        int ia = a - 1;
+        int ib = b - 1;
+
+        Vector3 va = view[ia];
+        Vector3 vb = view[ib];
+
+        if (va.Z < 0 || vb.Z < 0)
+            continue;
+
+        (int x, int y)? pa = screenPts[ia];
+        (int x, int y)? pb = screenPts[ib];
+
+        if (pa.HasValue && pb.HasValue)
         {
-            int px = steep ? y : x, py = steep ? x : y;
-            if (0 <= px && px < W && 0 <= py && py < H) board[py, px] = ch;
-            err -= dy;
-            if (err < 0)
-            {
-                y += ystep;
-                err += dx;
-            }
+            screen.DrawLine(pa.Value.x, pa.Value.y, pb.Value.x, pb.Value.y);
         }
     }
+
+    for (int i = 0; i < height; i++)
+    {
+        for (int j = 0; j < width; j++)
+        {
+            Console.SetCursorPosition(j, i);
+            Console.Write(screen[i, j]);
+        }
+    }
+
+    Thread.Sleep(30);
 }
+
+Vector3 Mul(float[,] m, Vector3 v)
+    => new(m[0, 0] * v.X + m[0, 1] * v.Y + m[0, 2] * v.Z,
+        m[1, 0] * v.X + m[1, 1] * v.Y + m[1, 2] * v.Z,
+        m[2, 0] * v.X + m[2, 1] * v.Y + m[2, 2] * v.Z);
+
+
+float[,] GetRotateX(float angle) => new[,]
+{
+    { 1f, 0f, 0f },
+    { 0f, MathF.Cos(angle), MathF.Sin(angle) },
+    { 0f, -MathF.Sin(angle), MathF.Cos(angle) }
+};
+
+float[,] GetRotateY(float angle) => new[,]
+{
+    { MathF.Cos(angle), 0f, -MathF.Sin(angle) },
+    { 0f, 1f, 0f },
+    { MathF.Sin(angle), 0f, MathF.Cos(angle) }
+};
+
+
+float[,] GetRotateZ(float angle) => new[,]
+{
+    { MathF.Cos(angle), MathF.Sin(angle), 0f },
+    { -MathF.Sin(angle), MathF.Cos(angle), 0f },
+    { 0f, 0f, 1f }
+};
+
+float ToRadians(float degrees) => degrees * MathF.PI / 180f;
